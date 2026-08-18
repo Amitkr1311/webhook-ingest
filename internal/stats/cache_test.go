@@ -1,6 +1,7 @@
 package stats_test
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/convin/webhook-ingest/internal/stats"
@@ -28,5 +29,29 @@ func TestCacheGetUnknownAccountIsZero(t *testing.T) {
 	c := stats.NewCache()
 	if got := c.Get("nobody"); got.CallCount != 0 || got.TotalDurationSec != 0 {
 		t.Fatalf("got %+v, want zero value", got)
+	}
+}
+
+// TestCacheRecordIsSafeForConcurrentDeliveries verifies that simultaneous
+// events for one account do not race or lose aggregate updates.
+func TestCacheRecordIsSafeForConcurrentDeliveries(t *testing.T) {
+	c := stats.NewCache()
+
+	const deliveries = 100
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range deliveries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			c.Record("acc_1", 1)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := c.Get("acc_1"); got.CallCount != deliveries || got.TotalDurationSec != deliveries {
+		t.Fatalf("got %+v, want %d calls and seconds", got, deliveries)
 	}
 }
